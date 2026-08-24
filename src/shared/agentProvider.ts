@@ -530,7 +530,12 @@ export const AGENT_PROVIDER_PRESETS: AgentProviderPreset[] = [
     // logged-in CLI — there is no separate "plain OpenAI API" path for Luna.
     id: 'cursor',
     label: 'Cursor',
-    defaultCommand: 'cursor-agent',
+    // Cursor Desktop 3.17+ exposes the supported terminal agent as the
+    // `cursor agent` subcommand, which reuses the desktop installation.
+    // Trust only the explicitly registered local workspace, keep Cursor's
+    // sandbox enabled, and let Smart Auto review routine tool calls. This avoids
+    // an unattended trust prompt without granting yolo/full-access mode.
+    defaultCommand: 'cursor agent --trust --sandbox enabled --auto-review',
     commandGroups: [],
     // --force/--yolo: allow tool calls without confirmations. --trust: skip the
     // workspace trust prompt so unattended Mac Mini spawns do not stall. Gated by
@@ -637,7 +642,7 @@ export function inferAgentProvider(command: string | undefined, explicit?: unkno
   if (bin === 'pi') return 'pi';
   if (bin === 'copilot') return 'copilot';
   // Cursor ships as `cursor-agent`; `agent` is a shorter alias (generic name — check last).
-  if (bin === 'cursor-agent') return 'cursor';
+  if (bin === 'cursor-agent' || bin === 'cursor') return 'cursor';
   if (bin === 'agent') return 'cursor';
   if (bin === 'claude' || !bin) return 'claude';
   return 'custom';

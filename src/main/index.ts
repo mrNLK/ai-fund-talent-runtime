@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import {
   rmSync, existsSync, readFileSync, readdirSync, statSync, cpSync, writeFileSync,
   unlinkSync, mkdirSync, renameSync, createWriteStream, copyFileSync, lstatSync,
-  readlinkSync, symlinkSync
+  readlinkSync, symlinkSync, chmodSync
 } from 'node:fs';
 import { randomBytes, createHash, timingSafeEqual } from 'node:crypto';
 import { join, resolve, sep, basename, dirname } from 'node:path';
@@ -2701,7 +2701,11 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
     // Confirmed live: a worker spawned without this flag deadlocked — a
     // cross-session message to it came back "held for the recipient user's
     // approval" with no surface for anyone to ever grant that approval.
-    const args = argsWithAutoModeFlag(opts.args ?? [], cfg.autoMode, provider);
+    const args = argsWithAutoModeFlag(
+      opts.args ?? [],
+      cfg.autoMode && process.env.AI_FUND_TALENT_MODE !== '1',
+      provider
+    );
     // Model precedence: an explicit per-agent --model (from the renderer) wins;
     // else the user's global defaultModel; else the role-based default tier. The
     // GOD is special-cased: it has its own engine config (godProvider/godModel), so
@@ -2857,12 +2861,13 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
     }
     // 2) Floor auto-state for pi's bundled extension auto-allow (guardrail #5): it
     //    only auto-approves tool calls when this is '1' (i.e. floor auto mode on).
-    extra.HIVE_AUTO_APPROVE = cfg.autoMode ? '1' : '0';
+    const effectiveAutoMode = cfg.autoMode && process.env.AI_FUND_TALENT_MODE !== '1';
+    extra.HIVE_AUTO_APPROVE = effectiveAutoMode ? '1' : '0';
     // 3) OpenCode's auto-approve + local provider live in its single config-injection
     //    env var, built dynamically so permission:allow is GATED on autoMode (#2).
     if (provider === 'opencode') {
       const oc: Record<string, unknown> = { autoupdate: false };
-      if (cfg.autoMode) oc.permission = { edit: 'allow', bash: 'allow', webfetch: 'allow' };
+      if (effectiveAutoMode) oc.permission = { edit: 'allow', bash: 'allow', webfetch: 'allow' };
       const baseUrl = cfg.providerBaseUrls?.opencode;
       if (baseUrl) {
         // Register the model id the user actually selects (the part after 'local/')
@@ -2882,7 +2887,7 @@ async function spawnAgentCore(opts: AgentSpawnOptions, owner: Electron.WebConten
   // Start/enable the daemon under this agent's isolated CODEX_HOME and connect
   // the TUI to it so the thread is visible in ChatGPT mobile. Best-effort: an
   // unavailable/older Codex install still gets a normal local terminal.
-  if (provider === 'codex' && opts.hive?.id) {
+  if (provider === 'codex' && opts.hive?.id && process.env.AI_FUND_TALENT_MODE !== '1') {
     await enableCodexRemoteForSpawn(opts, opts.hive.id);
   }
   const res = ptyManager.spawn(opts, owner);
@@ -4513,7 +4518,7 @@ async function processSpawnRequest(filePath: string): Promise<void> {
     requestProvider: raw.provider,
     requestModel: raw.model,
     defaultCommand: cfgSpawn.defaultCommand,
-    autoMode: !!cfgSpawn.autoMode
+    autoMode: !!cfgSpawn.autoMode && process.env.AI_FUND_TALENT_MODE !== '1'
   });
   const bin = launch.bin;
   // Missing-CLI → FAIL FAST. A headless worker has no human to watch an installer,
@@ -4855,6 +4860,7 @@ function bootstrapHiveServices(): void {
   // Tell the hive what it is running inside, BEFORE anything spawns: the prompt
   // builder reads this, so an agent spawned earlier would never learn it.
   hive.setRuntimeInfo({ version: app.getVersion(), packaged: app.isPackaged, appPath: app.getAppPath() });
+  installTalentResources();
   hive.setOrchestratorMaySpawn(readConfig().orchestratorMaySpawn === true);
   // An app-start marker in the event log. log.jsonl had twelve event kinds and
   // none of them meant "the app restarted", so a relaunch, and more importantly a
@@ -4907,6 +4913,31 @@ function bootstrapHiveServices(): void {
   reflector.start(); // bound oversized memory.md files on a timer (no-op until threshold)
 
   armAlwaysOnBeats();
+}
+
+/** Refresh the canonical non-sensitive Talent policy into the hive so the
+ * orchestrator (whose cwd is the hive home) and every worker read the same
+ * source. Credentials are never part of this bundle. */
+function installTalentResources(): void {
+  const root = hive.root();
+  if (!root) return;
+  const sourceRoot = app.isPackaged ? join(process.resourcesPath, 'talent') : app.getAppPath();
+  const resources = [
+    ['AI_FUND_TALENT_CONTEXT.md', 'AI_FUND_TALENT_CONTEXT.md'],
+    [join('config', 'talent-permissions.json'), 'talent-permissions.json'],
+    [join('resources', 'talent-policy.cjs'), 'TALENT_POLICY.cjs']
+  ] as const;
+  for (const [relativeSource, targetName] of resources) {
+    const source = app.isPackaged ? join(sourceRoot, basename(relativeSource)) : join(sourceRoot, relativeSource);
+    const target = join(root, targetName);
+    try {
+      const next = readFileSync(source);
+      if (!existsSync(target) || !next.equals(readFileSync(target))) writeFileSync(target, next);
+      if (targetName.endsWith('.cjs') && process.platform !== 'win32') chmodSync(target, 0o755);
+    } catch (error) {
+      console.error(`[talent] could not install ${targetName}:`, error);
+    }
+  }
 }
 
 /** Cadence of the worker inbox-wake watchdog (#151). Well under the renderer's

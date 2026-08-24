@@ -22,12 +22,8 @@ import {
   type OfficeCharacterName,
 } from './cast';
 
-import officeTilesetUrl from '@/assets/tilesets/office-tileset.png?url';
-import a5FloorsWallsUrl from '@/assets/tilesets/a5-office-floors-walls.png?url';
-import interiorsUrl from '@/assets/tilesets/interiors.png?url';
-// .tmj is Tiled JSON; imported as raw text and parsed by the loader.
-import officeMapRaw from '@/assets/maps/office.tmj?raw';
-import brooklyn99MapRaw from '@/assets/maps/brooklyn99.tmj?raw';
+import talentOfficeTilesetUrl from '@/assets/tilesets/ai-fund-office.svg?url';
+import { talentOfficeMapRaw } from './talentOfficeMap';
 
 /** Theme identifiers. Only `office` exists in Phase 0; the five TV-show themes
  *  (friends, brooklyn99, siliconvalley, got, hogwarts) land in later phases. */
@@ -143,12 +139,9 @@ export interface ThemeConfig {
  *  the former in-file constants in OfficeFloor.tsx / DeskScreen.ts. */
 export const OFFICE_THEME: ThemeConfig = {
   id: 'office',
-  mapRaw: officeMapRaw,
+  mapRaw: talentOfficeMapRaw,
   tilesets: [
-    // office-tileset.png — embedded in the map (firstgid 1); keep the map's copy.
-    { url: officeTilesetUrl, embedded: true },
-    { url: a5FloorsWallsUrl, firstgid: 513, image: 'a5', imagewidth: 256, imageheight: 512, tilewidth: 16, tileheight: 16, columns: 16, tilecount: 512 },
-    { url: interiorsUrl, firstgid: 1025, image: 'interiors', imagewidth: 256, imageheight: 1424, tilewidth: 16, tileheight: 16, columns: 16, tilecount: 1424 },
+    { url: talentOfficeTilesetUrl, embedded: true },
   ],
   primarySeatNames: [
     'desk-ceo',
@@ -199,10 +192,9 @@ export const OFFICE_THEME: ThemeConfig = {
     { kind: 'bin', stand: { x: 31, y: 16 }, facing: 'right', fx: { x: 32, y: 16 }, duration: 2.6 },
   ],
   monitor: {
-    offTopLeftGid: 365,
+    offTopLeftGid: 3,
     onGids: [
-      [367, 0, 0], [368, 1, 0],
-      [383, 0, 1], [384, 1, 1],
+      [4, 0, 0],
     ],
   },
   palette: {
@@ -227,7 +219,7 @@ export const OFFICE_THEME: ThemeConfig = {
  *  errands) are authored to brooklyn99.tmj's own coordinates. */
 export const BROOKLYN99_THEME: ThemeConfig = {
   id: 'brooklyn99',
-  mapRaw: brooklyn99MapRaw,
+  mapRaw: talentOfficeMapRaw,
   // PLACEHOLDER: brooklyn99.tmj uses the office gid space, so the same atlases
   // (office-tileset embedded @1, a5 @513, interiors @1025) resolve every tile.
   tilesets: OFFICE_THEME.tilesets,

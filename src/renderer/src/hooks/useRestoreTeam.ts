@@ -2,6 +2,9 @@ import { useEffect, useSyncExternalStore } from 'react';
 import { useStore, type Agent } from '@/store/store';
 import { buildSpawnCommand, inferAgentProvider, tokenizeCommand, type HarnessConfig } from '@/store/config';
 import { roleForHiveSpawn } from '@shared/agentRole';
+import { TALENT_TEAM } from '@shared/talentTeam';
+
+const FIXED_TALENT_IDS = new Set(TALENT_TEAM.map((agent) => agent.id));
 
 /** "Restore team" — respawn every worker from the previous session.
  *
@@ -75,7 +78,14 @@ export function useRestoreTeam(config?: HarnessConfig | null): RestoreTeamState 
     note = null;
     emit();
     const prevSel = useStore.getState().selectedId;
-    const restorableAgents = useStore.getState().restorableAgents;
+    // Fixed Talent roles are recreated by useTalentTeam from the current safe
+    // engine definition. Never revive an older persisted command that may carry
+    // superseded permission flags or connector settings.
+    const restorableAgents = useStore.getState().restorableAgents
+      .filter((agent) => !FIXED_TALENT_IDS.has(agent.id));
+    for (const fixed of useStore.getState().restorableAgents) {
+      if (FIXED_TALENT_IDS.has(fixed.id)) useStore.getState().removeRestorableAgent(fixed.id);
+    }
     // Tally every agent's outcome so the run ALWAYS leaves a visible trace — the
     // original bug was that every failure path was console-only, so a click that
     // couldn't spawn anything looked like a dead button.
@@ -224,7 +234,7 @@ export function useRestoreTeam(config?: HarnessConfig | null): RestoreTeamState 
 
     const check = (): void => {
       if (autoStarted || restoring || timer) return;
-      if (!useStore.getState().restorableAgents.length) return;
+      if (!useStore.getState().restorableAgents.some((agent) => !FIXED_TALENT_IDS.has(agent.id))) return;
       timer = setTimeout(() => {
         timer = null;
         if (autoStarted || restoring) return;
