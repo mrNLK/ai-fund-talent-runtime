@@ -9,6 +9,9 @@ const {
   buildTaskReviewPatch,
   isSameLocalDay,
   summarizeTaskEffectiveness,
+  taskBlockedReason,
+  taskIsArchived,
+  taskSupersededBy,
   taskWaitsOnHuman
 } = loadTs('src/shared/taskEffectiveness.ts');
 
@@ -62,6 +65,27 @@ test('waiting on the human requires an open question on a blocked task', () => {
   assert.equal(taskWaitsOnHuman({ status: 'blocked', humanQA: [{ q: 'Approve?' }] }), true);
   assert.equal(taskWaitsOnHuman({ status: 'blocked', humanQA: [{ q: 'Approve?', a: 'Yes' }] }), false);
   assert.equal(taskWaitsOnHuman({ status: 'doing', humanQA: [{ q: 'Approve?' }] }), false);
+  assert.equal(taskWaitsOnHuman({ status: 'blocked', archivedAt: NOW.toISOString(), humanQA: [{ q: 'Approve?' }] }), false);
+});
+
+test('system blockers explain superseded work and prefer an explicit reason', () => {
+  const parked = { title: 'Old discovery — PARKED, superseded by t-102' };
+  assert.equal(taskSupersededBy(parked), 't-102');
+  assert.equal(taskBlockedReason(parked), 'This job was replaced by t-102. It can be archived safely.');
+  assert.equal(taskBlockedReason({ ...parked, blockedReason: 'Provider quota exhausted.' }), 'Provider quota exhausted.');
+  assert.equal(taskIsArchived({ archivedAt: NOW.toISOString() }), true);
+  assert.equal(taskIsArchived({ archivedAt: '' }), false);
+});
+
+test('archived work is preserved but excluded from active effectiveness counts', () => {
+  const summary = summarizeTaskEffectiveness([
+    { status: 'blocked', archivedAt: NOW.toISOString() },
+    { status: 'done', archivedAt: NOW.toISOString() },
+    { status: 'doing' }
+  ], NOW);
+  assert.equal(summary.active, 1);
+  assert.equal(summary.blocked, 0);
+  assert.equal(summary.readyForReview, 0);
 });
 
 test('human answer patch updates only the latest open question', () => {

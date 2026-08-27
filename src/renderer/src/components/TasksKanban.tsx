@@ -5,6 +5,7 @@ import { PixelBadge } from './PixelBadge';
 import { Icon } from './Icon';
 import { useStore } from '@/store/store';
 import type { TaskReviewEntry, TaskReviewStatus } from '@shared/taskEffectiveness';
+import { taskBlockedReason, taskIsArchived } from '@shared/taskEffectiveness';
 
 /** A card on the task kanban. Mirrors HiveTask in the main/preload process —
  *  re-declared locally so the renderer doesn't reach into the preload package
@@ -26,6 +27,10 @@ export interface HiveTask {
   description?: string;
   assignee?: string;
   status: 'todo' | 'doing' | 'blocked' | 'done';
+  blockedReason?: string;
+  archivedAt?: string;
+  archivedReason?: string;
+  retryRequestedAt?: string;
   dependsOn: string[];
   priority: number;
   createdAt: string;
@@ -63,7 +68,7 @@ export function openQuestion(t: HiveTask): HumanQA | undefined {
 
 /** Waiting on the human = blocked with an unanswered question on the card. */
 export function waitsOnHuman(t: HiveTask): boolean {
-  return t.status === 'blocked' && !!openQuestion(t);
+  return t.status === 'blocked' && !taskIsArchived(t) && !!openQuestion(t);
 }
 
 const REVIEW_STATUSES: readonly TaskReviewStatus[] = ['accepted', 'rework', 'discarded'];
@@ -130,6 +135,10 @@ export function parseTasks(raw: unknown): HiveTask[] {
       assignee: typeof t.assignee === 'string' ? t.assignee : undefined,
       status: (['todo', 'doing', 'blocked', 'done'] as const).includes(t.status as Status)
         ? (t.status as Status) : 'todo',
+      blockedReason: typeof t.blockedReason === 'string' ? t.blockedReason : undefined,
+      archivedAt: typeof t.archivedAt === 'string' ? t.archivedAt : undefined,
+      archivedReason: typeof t.archivedReason === 'string' ? t.archivedReason : undefined,
+      retryRequestedAt: typeof t.retryRequestedAt === 'string' ? t.retryRequestedAt : undefined,
       dependsOn: Array.isArray(t.dependsOn) ? t.dependsOn.filter((d): d is string => typeof d === 'string') : [],
       priority: typeof t.priority === 'number' ? t.priority : 3,
       createdAt: typeof t.createdAt === 'string' ? t.createdAt : new Date().toISOString(),
@@ -221,6 +230,8 @@ export function TasksKanban() {
   }, [refresh]);
 
   const restorableAgents = useStore((s) => s.restorableAgents);
+  const activeTaskCount = tasks.filter((task) => !taskIsArchived(task)).length;
+  const archivedTaskCount = tasks.length - activeTaskCount;
   /** Resolve an assignee id to a display name — falls back to the restorable
    *  roster so a done card keeps its author's name even after that worker's
    *  terminal is gone, then to the raw id. */
@@ -241,7 +252,8 @@ export function TasksKanban() {
         borderBottom: '1px solid var(--cth-ink-300)'
       }}>
         <span style={{ fontFamily: 'var(--cth-font-display)', fontSize: 9, color: 'var(--cth-ink-500)' }}>
-          {tasks.length} task{tasks.length === 1 ? '' : 's'}
+          {activeTaskCount} active task{activeTaskCount === 1 ? '' : 's'}
+          {archivedTaskCount > 0 ? ` · ${archivedTaskCount} archived` : ''}
         </span>
         <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--cth-ink-300)' }}>
           new work? dispatch it to Talent Chief (monitor tab)
@@ -253,7 +265,7 @@ export function TasksKanban() {
         flex: 1, minHeight: 0, display: 'flex', gap: 8, padding: 10, overflowX: 'auto'
       }}>
         {COLUMNS.map((col) => {
-          const cards = tasks.filter((t) => t.status === col.key);
+          const cards = tasks.filter((t) => !taskIsArchived(t) && t.status === col.key);
           return (
             <div key={col.key} style={{
               flex: '1 1 0', minWidth: 170, display: 'flex', flexDirection: 'column',
@@ -464,6 +476,17 @@ export function TaskDetail({ task, all, assigneeName, onMove, onAssign, onAnswer
             }}>
               {task.description?.trim() || <span style={{ color: 'var(--cth-ink-300)' }}>(no description on this card)</span>}
             </div>
+
+            {taskIsArchived(task) && (
+              <OutcomeBlock
+                label="ARCHIVED"
+                value={task.archivedReason?.trim() || 'Hidden from active views. Its history is preserved.'}
+              />
+            )}
+
+            {task.status === 'blocked' && !waitsOnHuman(task) && (
+              <OutcomeBlock label="WHY THIS STOPPED" value={taskBlockedReason(task)} tone="warning" />
+            )}
 
             {/* Completion packet: the reviewable outcome, its evidence, and
                 the deterministic checks that make "done" meaningful. */}

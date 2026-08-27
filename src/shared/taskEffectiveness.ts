@@ -8,7 +8,10 @@ export interface TaskReviewEntry {
 }
 
 export interface EffectivenessTask {
+  title?: string;
   status?: string;
+  blockedReason?: string;
+  archivedAt?: string;
   createdAt?: string;
   completedAt?: string;
   reviewedAt?: string;
@@ -64,8 +67,29 @@ export function isSameLocalDay(value: unknown, now = new Date()): boolean {
 }
 
 export function taskWaitsOnHuman(task: EffectivenessTask): boolean {
-  if (task.status !== 'blocked' || !Array.isArray(task.humanQA)) return false;
+  if (task.status !== 'blocked' || taskIsArchived(task) || !Array.isArray(task.humanQA)) return false;
   return task.humanQA.some((entry) => entry && entry.q && !entry.a && !entry.dismissedAt);
+}
+
+export function taskIsArchived(task: Pick<EffectivenessTask, 'archivedAt'>): boolean {
+  return typeof task.archivedAt === 'string' && task.archivedAt.trim().length > 0;
+}
+
+/** Return the replacement task id recorded in common parked-card titles. */
+export function taskSupersededBy(task: Pick<EffectivenessTask, 'title'>): string | null {
+  const match = task.title?.match(/\bsuperseded by\s+([a-z0-9._-]+)/i);
+  return match?.[1] ?? null;
+}
+
+/** Plain-language reason shown for a system-blocked task. */
+export function taskBlockedReason(
+  task: Pick<EffectivenessTask, 'title' | 'blockedReason'>
+): string {
+  const explicit = task.blockedReason?.trim();
+  if (explicit) return explicit;
+  const replacement = taskSupersededBy(task);
+  if (replacement) return `This job was replaced by ${replacement}. It can be archived safely.`;
+  return 'The agent did not record why this job stopped. Retry it so Talent Chief can diagnose the problem.';
 }
 
 /** Build the smallest atomic patch for the latest open human question. */
@@ -125,6 +149,7 @@ export function summarizeTaskEffectiveness(
   const turnaroundMinutes: number[] = [];
 
   for (const task of tasks) {
+    if (taskIsArchived(task)) continue;
     if (task.status === 'done' && !task.reviewStatus) readyForReview++;
     if (task.status === 'todo' || task.status === 'doing') active++;
     if (task.status === 'blocked') blocked++;
