@@ -7,6 +7,9 @@ import {
   buildHumanAnswerPatch,
   isSameLocalDay,
   summarizeTaskEffectiveness,
+  taskBlockedReason,
+  taskIsArchived,
+  taskSupersededBy,
   type TaskReviewStatus
 } from '@shared/taskEffectiveness';
 import './TodayDashboard.css';
@@ -25,6 +28,9 @@ export function TodayDashboard() {
   const [showAllReviews, setShowAllReviews] = useState(false);
   const [sending, setSending] = useState<string | null>(null);
   const [answerNotice, setAnswerNotice] = useState<{ taskId: string; error?: string } | null>(null);
+  const [blockedAction, setBlockedAction] = useState<{ taskId: string; kind: BlockedAction } | null>(null);
+  const [blockedNotice, setBlockedNotice] = useState<BlockedNotice | null>(null);
+  const [showArchived, setShowArchived] = useState(false);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const refresh = useCallback(async () => {
@@ -48,14 +54,20 @@ export function TodayDashboard() {
     .sort((a, b) => b.priority - a.priority
       || dateMs(openQuestion(a)?.askedAt) - dateMs(openQuestion(b)?.askedAt)), [tasks]);
   const readyForReview = useMemo(() => tasks
-    .filter((task) => task.status === 'done' && !task.reviewStatus)
+    .filter((task) => !taskIsArchived(task) && task.status === 'done' && !task.reviewStatus)
     .sort((a, b) => dateMs(b.completedAt) - dateMs(a.completedAt) || b.priority - a.priority), [tasks]);
   const visibleReviews = showAllReviews ? readyForReview : readyForReview.slice(0, DEFAULT_REVIEW_COUNT);
   const active = useMemo(() => tasks
-    .filter((task) => task.status === 'doing' || task.status === 'todo' || (task.status === 'blocked' && !waitsOnHuman(task)))
+    .filter((task) => !taskIsArchived(task) && (task.status === 'doing' || task.status === 'todo'))
     .sort((a, b) => statusRank(a.status) - statusRank(b.status) || b.priority - a.priority), [tasks]);
+  const systemBlocked = useMemo(() => tasks
+    .filter((task) => !taskIsArchived(task) && task.status === 'blocked' && !waitsOnHuman(task))
+    .sort((a, b) => b.priority - a.priority), [tasks]);
+  const archivedBlocked = useMemo(() => tasks
+    .filter((task) => taskIsArchived(task) && task.status === 'blocked')
+    .sort((a, b) => dateMs(b.archivedAt) - dateMs(a.archivedAt)), [tasks]);
   const completedToday = useMemo(() => tasks
-    .filter((task) => !!task.reviewStatus && isSameLocalDay(task.reviewedAt))
+    .filter((task) => !taskIsArchived(task) && !!task.reviewStatus && isSameLocalDay(task.reviewedAt))
     .sort((a, b) => dateMs(b.reviewedAt) - dateMs(a.reviewedAt)), [tasks]);
 
   const nameFor = (id?: string): string | undefined => id
@@ -100,6 +112,58 @@ export function TodayDashboard() {
     }
   };
 
+  const runBlockedAction = async (task: HiveTask, kind: BlockedAction) => {
+    if (blockedAction) return;
+    const at = new Date().toISOString();
+    const patch: Partial<HiveTask> = kind === 'archive'
+      ? { archivedAt: at, archivedReason: 'Archived from Today. Task history preserved.' }
+      : kind === 'restore'
+        ? { archivedAt: '', archivedReason: '' }
+        : { status: 'todo', archivedAt: '', archivedReason: '', retryRequestedAt: at };
+    setBlockedAction({ taskId: task.id, kind });
+    setBlockedNotice(null);
+    try {
+      const saved = await window.cth.hivePatchTask(task.id, patch);
+      if (!saved.ok) throw new Error('The task changed before the action could be saved.');
+      setTasks((current) => current.map((entry) => (
+        entry.id === task.id ? { ...entry, ...patch } : entry
+      )));
+
+      if (kind === 'retry') {
+        const notified = await window.cth.hiveSend({
+          to: 'god',
+          act: 'request',
+          subject: `RETRY REQUESTED on task "${task.title}"`,
+          body: [
+            `The human requested a retry of task ${task.id} ("${task.title}").`,
+            `Previous blocker: ${taskBlockedReason(task)}`,
+            'The card is back in todo. Diagnose the blocker, assign the right owner, and keep blockedReason current if it stops again.'
+          ].join('\n')
+        }, 'human');
+        if (!notified.ok) {
+          setBlockedNotice({
+            kind,
+            task,
+            error: 'The retry was recorded, but Talent Chief could not be notified.'
+          });
+          return;
+        }
+      }
+
+      setBlockedNotice({ kind, task });
+      void refresh();
+    } catch (error) {
+      setBlockedNotice({
+        kind,
+        task,
+        error: error instanceof Error ? error.message : 'The action could not be saved.'
+      });
+      void refresh();
+    } finally {
+      setBlockedAction(null);
+    }
+  };
+
   return (
     <div className="cth-today">
       <header className="cth-today__header">
@@ -118,6 +182,16 @@ export function TodayDashboard() {
       </section>
 
       <p className="cth-today__privacy">Effectiveness stays local. Agent activity and token volume do not count as outcomes.</p>
+
+      {blockedNotice && (
+        <div className={`cth-today__notice${blockedNotice.error ? ' is-error' : ''}`} role="status">
+          <span>{blockedNotice.error ?? blockedNoticeText(blockedNotice.kind)}</span>
+          {blockedNotice.kind === 'archive' && !blockedNotice.error && (
+            <button type="button" onClick={() => void runBlockedAction(blockedNotice.task, 'restore')}>undo</button>
+          )}
+          <button type="button" aria-label="dismiss notice" onClick={() => setBlockedNotice(null)}>close</button>
+        </div>
+      )}
 
       <OutcomeSection
         title="Needs your answer"
@@ -180,6 +254,49 @@ export function TodayDashboard() {
         ))}
       </OutcomeSection>
 
+      <OutcomeSection
+        title="Agent issues"
+        count={systemBlocked.length}
+        accent="coral"
+        empty="No stalled agent jobs need attention."
+      >
+        <p className="cth-today-section__help">These do not need your answer. Retry a job, or archive it from Today.</p>
+        {systemBlocked.map((task) => (
+          <BlockedTaskCard
+            key={task.id}
+            task={task}
+            assignee={nameFor(task.assignee)}
+            busy={blockedAction?.taskId === task.id}
+            onRetry={() => void runBlockedAction(task, 'retry')}
+            onArchive={() => void runBlockedAction(task, 'archive')}
+            onOpen={() => openTaskDetail(task.id)}
+          />
+        ))}
+      </OutcomeSection>
+
+      {archivedBlocked.length > 0 && (
+        <section className="cth-today-archived">
+          <button type="button" onClick={() => setShowArchived((shown) => !shown)}>
+            {showArchived ? 'hide archived jobs' : `show ${archivedBlocked.length} archived job${archivedBlocked.length === 1 ? '' : 's'}`}
+          </button>
+          {showArchived && (
+            <div className="cth-today-section__body">
+              {archivedBlocked.map((task) => (
+                <BlockedTaskCard
+                  key={task.id}
+                  task={task}
+                  assignee={nameFor(task.assignee)}
+                  busy={blockedAction?.taskId === task.id}
+                  archived
+                  onRestore={() => void runBlockedAction(task, 'restore')}
+                  onOpen={() => openTaskDetail(task.id)}
+                />
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+
       <OutcomeSection title="Reviewed today" count={completedToday.length} accent="mint" empty="No outcomes reviewed today yet.">
         {completedToday.map((task) => (
           <OutcomeRow
@@ -231,6 +348,48 @@ function QuestionCard({ task, assignee, value, sending, notice, onChange, onSubm
         <span className={notice?.error ? 'is-error' : ''}>
           {notice?.error ?? (notice ? 'Answer sent. The task can continue.' : '⌘↵ to send')}
         </span>
+      </div>
+    </article>
+  );
+}
+
+type BlockedAction = 'retry' | 'archive' | 'restore';
+
+interface BlockedNotice {
+  kind: BlockedAction;
+  task: HiveTask;
+  error?: string;
+}
+
+function BlockedTaskCard({ task, assignee, busy, archived = false, onRetry, onArchive, onRestore, onOpen }: {
+  task: HiveTask;
+  assignee?: string;
+  busy: boolean;
+  archived?: boolean;
+  onRetry?: () => void;
+  onArchive?: () => void;
+  onRestore?: () => void;
+  onOpen: () => void;
+}) {
+  const superseded = taskSupersededBy(task);
+  return (
+    <article className={`cth-today-blocked${archived ? ' is-archived' : ''}`}>
+      <div className="cth-today-blocked__topline">
+        <span>{archived ? 'ARCHIVED' : superseded ? 'PARKED' : 'BLOCKED'}</span>
+        {assignee && <span>{assignee}</span>}
+      </div>
+      <button type="button" className="cth-today-blocked__title" onClick={onOpen}>{task.title}</button>
+      <p>{taskBlockedReason(task)}</p>
+      <div className="cth-today-blocked__actions">
+        {archived ? (
+          <button type="button" disabled={busy} onClick={onRestore}>{busy ? 'restoring…' : 'restore'}</button>
+        ) : (
+          <>
+            <button type="button" disabled={busy} onClick={onRetry}>{busy ? 'working…' : superseded ? 'retry anyway' : 'retry job'}</button>
+            <button type="button" disabled={busy} onClick={onArchive}>archive</button>
+          </>
+        )}
+        <button type="button" disabled={busy} onClick={onOpen}>details</button>
       </div>
     </article>
   );
@@ -317,6 +476,12 @@ function formatSavedTime(minutes: number): string {
   if (minutes < 60) return `${minutes}m`;
   const hours = minutes / 60;
   return Number.isInteger(hours) ? `${hours}h` : `${hours.toFixed(1)}h`;
+}
+
+function blockedNoticeText(kind: BlockedAction): string {
+  if (kind === 'retry') return 'Retry requested. Talent Chief has been notified.';
+  if (kind === 'restore') return 'Job restored to Agent issues.';
+  return 'Job archived from Today. Its history was kept.';
 }
 
 function reviewLabel(status?: TaskReviewStatus): string {
