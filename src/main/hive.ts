@@ -37,7 +37,23 @@ import {
   type AgentProvider
 } from '../shared/agentProvider';
 import { MCP_CATALOG } from '../shared/mcpCatalog';
+import {
+  buildTalentResearchMcpServers,
+  isTalentResearchAgent,
+  talentResearchMcpPermissionAllows,
+  talentResearchToolGuidance
+} from '../shared/talentResearchMcp';
+import {
+  isTalentAnalystAgent,
+  talentSiderScholarClaudeDenyPermissions,
+  talentSiderScholarCodexToml,
+  talentSiderScholarGuidance
+} from '../shared/talentSiderScholar';
 import { selectBroadcastTargets } from '../shared/broadcast';
+import {
+  loadTalentResearchSecrets,
+  talentResearchSecretStatus
+} from './talentResearchSecrets';
 import { preferredAgentRole } from '../shared/agentRole';
 import { mergeTaskLedger } from '../shared/taskLedger';
 import { expandTilde } from './fs';
@@ -117,6 +133,27 @@ export interface HiveTask {
   /** Outcome summary, surfaced by the Slack done-notifier when this card reaches
    *  'done'. Optional; the notifier falls back to description/title. */
   result?: string;
+  /** Review-ready completion packet and local effectiveness fields. These stay
+   *  in tasks.json; anonymous product telemetry never receives their contents. */
+  deliverable?: string;
+  artifacts?: string[];
+  evidence?: string[];
+  checks?: string[];
+  limitations?: string[];
+  approvalNeeded?: string;
+  completedAt?: string;
+  reviewStatus?: 'accepted' | 'rework' | 'discarded';
+  reviewedAt?: string;
+  firstReviewStatus?: 'accepted' | 'rework' | 'discarded';
+  reworkCount?: number;
+  reviewNote?: string;
+  timeSavedMinutes?: number;
+  reviewHistory?: Array<{
+    decision: 'accepted' | 'rework' | 'discarded';
+    at: string;
+    note?: string;
+    timeSavedMinutes?: number;
+  }>;
   /** Set when this task originated from a Slack message — the thread the
    *  done-summary reply is posted back into. Consumed OUTBOUND only; populating
    *  it is the inbound/kanban side's job and does not affect routing. */
@@ -684,8 +721,23 @@ export class HiveManager {
       AGENT_ID: meta.id,
       AGENT_NAME: meta.name,
       HIVE_ROOT: root,
-      AGENT_DIR: dir
+      AGENT_DIR: dir,
+      AI_FUND_TALENT_MODE: '1',
+      AI_FUND_CANDIDATE_WRITES: 'blocked',
+      AI_FUND_CANDIDATE_OUTREACH: 'blocked',
+      TALENT_POLICY_CLI: join(root, 'TALENT_POLICY.cjs')
     };
+    // Search keys belong only to Talent Researcher. Empty strings overwrite any
+    // inherited EXA/PARALLEL values so other workers cannot spend those APIs.
+    if (process.env.AI_FUND_TALENT_MODE === '1') {
+      env.EXA_API_KEY = '';
+      env.PARALLEL_API_KEY = '';
+      if (isTalentResearchAgent(meta.id)) {
+        const secrets = loadTalentResearchSecrets();
+        if (secrets.EXA_API_KEY) env.EXA_API_KEY = secrets.EXA_API_KEY;
+        if (secrets.PARALLEL_API_KEY) env.PARALLEL_API_KEY = secrets.PARALLEL_API_KEY;
+      }
+    }
     // The bundled-node launcher, so an agent can run the hive's .cjs helpers (KG
     // CLI, Slack reply helper) even when `node` is not on its PATH. Invoking the
     // Electron binary directly would open a second app window, so this must stay
@@ -751,7 +803,7 @@ export class HiveManager {
           if (desc.kind === 'hooks') {
             if (desc.shim === 'agy') this.installAgyHooks();
             else if (desc.shim === 'codex') {
-              env.CODEX_HOME = this.installCodexHooks(dir);
+              env.CODEX_HOME = this.installCodexHooks(dir, meta.id);
               // Codex refuses to run hooks from a config dir without persisted
               // "hook trust" (normally an interactive gate). Our hooks.json is
               // hive-authored inside an isolated CODEX_HOME, so we bypass that gate
@@ -759,6 +811,11 @@ export class HiveManager {
               // that already vets hook sources"). Without it the hooks silently
               // never fire. Must precede the positional prompt.
               preArgs.push('--dangerously-bypass-hook-trust');
+              // The Talent worker gets a writable local workspace plus its own
+              // mailbox, no interactive approval deadlocks, and native read-only
+              // web search. This is intentionally NOT danger-full-access.
+              preArgs.push('--sandbox', 'workspace-write', '--ask-for-approval', 'never',
+                '--add-dir', dir, '--search');
             }
             else if (desc.shim === 'pi') {
               // Pi (earendil-works) has a rich pi.on(event) lifecycle. We drop a
@@ -853,7 +910,14 @@ export class HiveManager {
     const args: string[] = [];
     if (!claudeProvider) return { args, env };
 
-    args.push('--append-system-prompt', this.injectedPrompt(meta, dir, root, opts.semanticMemory ?? false, opts.knowledgeGraph ?? false, opts.kgCliPath));
+    // Do not inherit user-level Claude plugins, connectors, Chrome access, or
+    // production integrations into a Talent worker. Authentication remains the
+    // user's normal local Claude login; capabilities come from built-in tools and
+    // this worker-only settings file.
+    args.push('--setting-sources', 'local', '--strict-mcp-config', '--no-chrome',
+      '--add-dir', root,
+      '--permission-mode', 'acceptEdits',
+      '--append-system-prompt', this.injectedPrompt(meta, dir, root, opts.semanticMemory ?? false, opts.knowledgeGraph ?? false, opts.kgCliPath));
 
     // Phase 1 — autonomy: attach lifecycle hooks via --settings (no edits to the
     // user's repo) so the agent reports activity and drains its inbox on Stop.
@@ -862,8 +926,15 @@ export class HiveManager {
     if (sock && shim) {
       env.HIVE_SOCK = sock;
       const settingsPath = join(dir, 'settings.json');
-      this.writeJson(settingsPath, this.hookSettings(shim, meta.cwd, opts.mcpDefaults, opts.theme));
+      this.writeJson(settingsPath, this.hookSettings(shim, meta.cwd, opts.mcpDefaults, opts.theme, root, meta.id));
       args.push('--settings', settingsPath);
+      // --strict-mcp-config intentionally ignores MCP definitions discovered
+      // from ordinary settings sources. Pass the same per-agent, key-free file
+      // explicitly for Talent Researcher so only that PTY receives the research
+      // servers. Real credentials remain environment-only.
+      if (process.env.AI_FUND_TALENT_MODE === '1' && isTalentResearchAgent(meta.id)) {
+        args.push('--mcp-config', settingsPath);
+      }
     }
     return { args, env };
   }
@@ -1031,7 +1102,14 @@ export class HiveManager {
    *  (W3) the default MCP bundle merged into this PER-SESSION settings file. cwd
    *  scopes the filesystem/git servers; cfg (the consent map) gates which servers
    *  are written. Claude-only — this is invoked solely on the Claude spawn path. */
-  private hookSettings(shim: string, cwd: string, cfg: McpDefaultsMap, theme?: 'light' | 'dark'): unknown {
+  private hookSettings(
+    shim: string,
+    cwd: string,
+    cfg: McpDefaultsMap,
+    theme?: 'light' | 'dark',
+    talentRoot?: string,
+    agentId?: string
+  ): unknown {
     // Bundled node, NOT bare `node` — see nodeLauncherPath(). Claude runs each of
     // these through `sh -c` with a stripped PATH, where `node` is often absent.
     const cmd = this.nodeRun(shim);
@@ -1039,7 +1117,13 @@ export class HiveManager {
       ...(matcher ? { matcher } : {}),
       hooks: [{ type: 'command', command: cmd }]
     });
-    const mcpServers = this.buildDefaultMcpServers(cwd, cfg);
+    const researchSecrets = process.env.AI_FUND_TALENT_MODE === '1' && isTalentResearchAgent(agentId)
+      ? loadTalentResearchSecrets()
+      : {};
+    const mcpServers = process.env.AI_FUND_TALENT_MODE === '1'
+      ? buildTalentResearchMcpServers(agentId, researchSecrets)
+      : this.buildDefaultMcpServers(cwd, cfg);
+    const researchMcpAllows = talentResearchMcpPermissionAllows(Object.keys(mcpServers));
     return {
       // Match the TUI's truecolor palette to the harness terminal theme —
       // PER SESSION, so the user's global Claude theme (their own terminals
@@ -1058,6 +1142,23 @@ export class HiveManager {
       // Claude merges this additively. Omitted entirely when empty so a settings
       // file with no enabled servers is unchanged from before.
       ...(Object.keys(mcpServers).length ? { mcpServers } : {}),
+      ...(process.env.AI_FUND_TALENT_MODE === '1'
+        ? {
+            permissions: {
+              allow: [
+                'WebSearch',
+                'WebFetch',
+                ...researchMcpAllows,
+                ...(talentRoot ? [`Read(${talentRoot}/**)`] : [])
+              ],
+              deny: [
+                'Bash',
+                'NotebookEdit',
+                ...talentSiderScholarClaudeDenyPermissions(Object.keys(mcpServers))
+              ]
+            }
+          }
+        : {}),
       // The status line gets the session status JSON after every response —
       // including context_window.{total_input_tokens,context_window_size},
       // the only clean programmatic source for the session's REAL context
@@ -1316,7 +1417,7 @@ export class HiveManager {
     // us) was invisible to every investigation.
     const rt = this.runtimeInfo();
     const runtimeLine = rt
-      ? `RUNNING BUILD: Munder Difflin v${rt.version}, ${rt.packaged ? 'packaged app' : 'local dev build'}${rt.appPath ? `, from ${rt.appPath}` : ''}. Say this version if asked which one is running, and do not assume behaviour from an older one. A local dev build inherits the launching shell's environment (umask included) where a packaged app does not, so file modes and inherited env can legitimately differ between the two. \`log.jsonl\` records an \`app-start\` event on every launch, which is how you spot a restart or a build switch.`
+      ? `RUNNING BUILD: AI Fund Talent Runtime v${rt.version}, based on Munder Difflin v0.4.5, ${rt.packaged ? 'packaged app' : 'local dev build'}${rt.appPath ? `, from ${rt.appPath}` : ''}. Say this version if asked which one is running, and do not assume behaviour from an older one. A local dev build inherits the launching shell's environment (umask included) where a packaged app does not, so file modes and inherited env can legitimately differ between the two. \`log.jsonl\` records an \`app-start\` event on every launch, which is how you spot a restart or a build switch.`
       : '';
     // Item 11: god could not find the spawn queue. The mechanism has worked since
     // v0.4.4, but nothing told him it existed — the prompt said "spawn" without
@@ -1336,6 +1437,18 @@ export class HiveManager {
       ? 'You are Michael\'s PREP ASSISTANT. You will be handed short, possibly vague instructions (each begins with "ENRICH TASK:"). For each one: (1) figure out which project it concerns and cd into the most relevant repo — you start in Michael\'s home directory; (2) gather concrete context READ-ONLY (exact file paths, current state, relevant code, conventions, active branch, gotchas) — NEVER modify, create, or delete files; (3) rewrite the instruction into ONE clear, self-contained prompt that Michael can execute autonomously, preserving the user\'s original intent without inventing scope. Then deliver it: write ONE message JSON into your outbox with "to":"god", "act":"request", a short subject, and the finished prompt as the body. Do NOT perform the task yourself — your only output is the improved prompt sent to Michael.'
       : 'For anything ambiguous, cross-cutting, or needing sign-off, address a message to "god".';
     const guardrailsLine = 'Guardrails: a circuit breaker watches the floor — a "Circuit breaker: steer/constrain" message means you are looping or overspending, so STOP repeating, summarize what you tried, and follow it. Be token-frugal (a floor-wide or per-agent token budget can pause you). The shared plan has two parts: board.md (freeform; god is the sole scribe) and tasks.json (structured kanban — todo/doing/blocked/done).';
+    const taskCompletionLine = meta.isGod
+      ? 'TASK COMPLETION: `done` means REVIEW-READY, not merely that an agent stopped. Before setting a card to done, record `completedAt` (ISO time) and a plain-language `result`. Also record the output in `deliverable` and/or `artifacts`, the verification in `checks`, source links in `evidence` when claims depend on external facts, known gaps in `limitations`, and any human authorization still required in `approvalNeeded`. Preserve these fields through rework. The human records `reviewStatus`, `reviewedAt`, `firstReviewStatus`, `reworkCount`, optional `timeSavedMinutes`, and `reviewHistory`; never overwrite or infer those review fields yourself.'
+      : '';
+    const talentPolicyLine = `AI FUND TALENT POLICY: read ${inRoot('AI_FUND_TALENT_CONTEXT.md')} before Talent work and follow ${inRoot('talent-permissions.json')}. Candidate outreach, ATS/CRM changes, and candidate or production-data writes are disabled in this prototype. Use ${inRoot('TALENT_POLICY.cjs')} to check a proposed controlled action. Never put candidate names or mutable candidate facts in memory.md; keep them in task outputs.`;
+    const researchStatus = isTalentResearchAgent(meta.id)
+      ? talentResearchSecretStatus(loadTalentResearchSecrets())
+      : { hasExa: false, hasParallel: false };
+    const researchToolsLine = isTalentResearchAgent(meta.id)
+      ? talentResearchToolGuidance(researchStatus.hasExa, researchStatus.hasParallel)
+      : isTalentAnalystAgent(meta.id)
+        ? talentSiderScholarGuidance()
+        : '';
     const slackLine = meta.isGod
       ? 'SLACK REPLIES: When composing a Slack reply (or writing the `result` field of a Slack-origin kanban card), you MUST: (1) directly address what the user asked — never a bare "done"; (2) include the relevant specifics, outcome, and details; (3) format for Slack mrkdwn — open with a short *bold* headline, use bullet points for multiple items, wrap code/paths in `backtick` blocks, keep it concise (no walls of text). When finishing a Slack-origin task, always write a complete, user-facing, well-formatted `result` on the kanban card — the system posts it verbatim to Slack as the done reply.'
       : `SLACK REPLIES: If god dispatches you a task that came from Slack, it will include an exact \`"${hiveNode}" "<helper>" --channel … --thread … --text "…"\` reply command — when you finish, run it VERBATIM to post your result back to that thread yourself. The reply must be SUBSTANTIVE Slack mrkdwn (a short *bold* headline + the actual outcome/specifics/links), NEVER a bare "done".`;
@@ -1349,6 +1462,9 @@ export class HiveManager {
       `3. To ask another agent for something or share information, write ONE message JSON into ${inDir('outbox')} (schema in PROTOCOL.md). NEVER write into another agent's folder — the orchestrator delivers your outbox.`,
       '4. At the END of a task, append what you learned to memory.md so future-you remembers.',
       guardrailsLine,
+      taskCompletionLine,
+      talentPolicyLine,
+      researchToolsLine,
       memoryLine,
       knowledgeLine,
       godLine,
@@ -1356,7 +1472,7 @@ export class HiveManager {
       runtimeLine,
       slackLine,
       ctxLine,
-      `Env vars available to you: AGENT_ID, AGENT_NAME, HIVE_ROOT, AGENT_DIR.`
+      `Env vars available to you: AGENT_ID, AGENT_NAME, HIVE_ROOT, AGENT_DIR, AI_FUND_TALENT_MODE, AI_FUND_CANDIDATE_WRITES, AI_FUND_CANDIDATE_OUTREACH, TALENT_POLICY_CLI.`
     ].filter(Boolean).join('\n');
   }
 
@@ -1869,44 +1985,37 @@ export class HiveManager {
    *  their login), we point this worker at a PER-AGENT CODEX_HOME (`<dir>/.codex`,
    *  alongside Claude's settings.json) holding our own config.toml with `[hooks]`
    *  tables — so the hooks fire ONLY for hive workers and a personal `codex` run is
-   *  untouched. The user's ~/.codex/auth.json is linked in and their config.toml is
-   *  copied + extended (login + model/provider/trust settings still apply).
-   *  Returns the CODEX_HOME path for the caller to put in the worker's env. */
-  private installCodexHooks(dir: string): string {
+   *  untouched. The user's ~/.codex/auth.json is linked read-only for the local
+   *  OpenAI login, but their config.toml is NEVER copied: it may contain MCP
+   *  connectors, production endpoints, or secrets that a worker must not inherit.
+   *  Returns the CODEX_HOME path for the caller to put in the worker's env.
+   *  Talent Candidate Analyst also receives a generated Sider Scholar apps
+   *  stanza. That is allowlisted in code, never copied from ~/.codex. */
+  private installCodexHooks(dir: string, agentId?: string): string {
     const home = join(dir, '.codex');
     try {
       mkdirSync(home, { recursive: true });
       const userHome = join(homedir(), '.codex');
       // Symlink the user's login so the isolated home authenticates as them.
-      // (config.toml is NOT symlinked — we write our own below, seeded from theirs,
-      // because it must carry our [hooks] tables.) Fall back to copy where symlinks
-      // need privilege (Windows). Idempotent — skip if already linked.
+      // config.toml is never linked or copied; we write a minimal worker-only file
+      // below. Fall back to an auth copy only where symlinks need privilege
+      // (Windows). Idempotent — skip if already linked.
       const authSrc = join(userHome, 'auth.json');
       const authDest = join(home, 'auth.json');
       if (existsSync(authSrc) && !existsSync(authDest)) {
         try { symlinkSync(authSrc, authDest); }
         catch { try { copyFileSync(authSrc, authDest); } catch { /* best-effort */ } }
       }
-      // The managed app-server daemon used by Codex Remote Control is launched
-      // from the standalone install rooted at $CODEX_HOME/packages. Share the
-      // user's installed binaries without duplicating them into every agent.
-      const packagesSrc = join(userHome, 'packages');
-      const packagesDest = join(home, 'packages');
-      if (existsSync(packagesSrc) && !existsSync(packagesDest)) {
-        try {
-          symlinkSync(packagesSrc, packagesDest, process.platform === 'win32' ? 'junction' : 'dir');
-        } catch { /* remote integration falls back to a local TUI if unavailable */ }
-      }
       // Wire lifecycle hooks via config.toml `[hooks]` tables — the user-layer
       // discovery surface Codex actually scans. (A bare $CODEX_HOME/hooks.json is
       // plugin-scoped — referenced FROM a plugin manifest — and is NOT discovered
       // for a plain config dir; verified empirically that it never fires.) We seed
-      // this config.toml from the user's (their model/provider/trust settings carry
-      // over) and append a `[[hooks.<Event>]]` group per event, each pointing at the
+      // this config.toml from scratch and add a `[[hooks.<Event>]]` group per event,
+      // each pointing at the
       // SAME cth-hook shim — reused verbatim (Codex's hook payload + response are
       // already Claude-shaped, so HookServer/drainForStop run unchanged). Regenerated
-      // each spawn (idempotent). A single-quoted TOML literal avoids path escaping
-      // (hive roots are space/quote-free). NOTE: hooks fire in INTERACTIVE codex
+      // each spawn (idempotent). The command is shell-quoted because Talent harness
+      // roots deliberately use a human-readable path containing spaces. NOTE: hooks fire in INTERACTIVE codex
       // sessions (how hive workers run), not in headless `codex exec`.
       //
       // `timeout` IS SECONDS HERE — do NOT copy Claude's `timeout: 0` sentinel into
@@ -1924,15 +2033,17 @@ export class HiveManager {
       // `codex app-server` → initialize → `hooks/list` reports the normalized
       // timeoutSec per event.
       const shim = this.shimPath();
-      let config = existsSync(join(userHome, 'config.toml'))
-        ? readFileSync(join(userHome, 'config.toml'), 'utf8') : '';
+      let config = '# AI Fund Talent worker config. Generated locally; do not add connectors or secrets.\n';
       if (shim) {
         const events = ['PreToolUse', 'PostToolUse', 'Stop', 'SubagentStop',
           'SessionStart', 'UserPromptSubmit', 'PreCompact', 'PostCompact'];
         config += '\n# --- munder-hive lifecycle hooks (auto-generated; do not edit) ---\n';
         for (const ev of events) {
-          config += `\n[[hooks.${ev}]]\n[[hooks.${ev}.hooks]]\ntype = "command"\ncommand = '${this.nodeRunUnquoted(shim)}'\ntimeout = 30\n`;
+          config += `\n[[hooks.${ev}]]\n[[hooks.${ev}.hooks]]\ntype = "command"\ncommand = '${this.nodeRun(shim)}'\ntimeout = 30\n`;
         }
+      }
+      if (process.env.AI_FUND_TALENT_MODE === '1' && isTalentAnalystAgent(agentId)) {
+        config += talentSiderScholarCodexToml();
       }
       writeFileSync(join(home, 'config.toml'), config, 'utf8');
     } catch (e) { console.error('[hive] installCodexHooks failed:', e); }

@@ -74,9 +74,9 @@ export function AgentHoldButton({ agentId }: { agentId: string }) {
       <span
         className="cth-tip cth-tip-wrap"
         data-tip={err ? err : on
-          ? `End the 1:1. Michael can hand ${agent.name} work again.`
-          : `Take ${agent.name} aside. Michael stops sending them work until you end it. Unlike the two buttons here, this does not restrain the agent: they keep running and keep answering you.`}
-        aria-label={on ? 'End the 1:1 and release this agent to Michael' : 'Take this agent aside for a 1:1'}
+          ? `End the 1:1. Talent Chief can hand ${agent.name} work again.`
+          : `Take ${agent.name} aside. Talent Chief stops sending them work until you end it. The agent stays available to you.`}
+        aria-label={on ? 'End the 1:1 and release this agent to Talent Chief' : 'Take this agent aside for a 1:1'}
         style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
       >
         <Icon name={on ? 'pause' : 'play'} /> {err ? '1:1 failed' : on ? 'in 1:1' : '1:1'}

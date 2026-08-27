@@ -37,8 +37,8 @@ export function MichaelBooting() {
               margin: 0, fontSize: 13, lineHeight: '20px', textAlign: 'center',
               color: 'var(--cth-ink-700)'
             }}>
-              Michael is settling into the corner office and getting the floor
-              ready. Hang tight…
+              Talent Chief is starting the team and loading the Talent policy.
+              This takes a few seconds.
             </p>
           </div>
         </PixelPanel>

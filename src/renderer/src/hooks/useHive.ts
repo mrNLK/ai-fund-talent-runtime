@@ -19,6 +19,7 @@ import type { AgentProvider } from '../../../shared/agentProvider';
 import { bridgeOf, providerPreset } from '../../../shared/agentProvider';
 import { isDurableRole, preferredAgentRole, roleForHiveSpawn } from '../../../shared/agentRole';
 import { inboxNudgeText } from '../../../shared/hiveNudge';
+import { TALENT_CHIEF_GOAL, TALENT_CHIEF_NAME } from '../../../shared/talentTeam';
 import { acquireTerminal, resetTerminal, isTerminalAutomationSafe } from '@/components/terminalPool';
 import { canDeliverToAgent, deliverWithAcknowledgement, checkPrecondition } from './queueDelivery';
 import { OFFICE_CAST, DEFAULT_CHARACTER } from '@/scene/office/cast';
@@ -72,12 +73,12 @@ function withStandingGoal(agent: Agent, text: string): string {
 // The first thing Michael (god) is told on a fresh spawn — orient him and put
 // him to work running the floor. Kept terse and action-oriented.
 const INITIAL_GOD_PROMPT = [
-  "You're online as Michael, the orchestrator of the hive. Get oriented, then start running the floor:",
-  '1. Read your memory.md and drain every message in your inbox.',
+  `You're online as ${TALENT_CHIEF_NAME}, Mike's orchestrator for the AI Fund Talent Runtime. Get oriented, then start running the team:`,
+  '1. Read AI_FUND_TALENT_CONTEXT.md, your memory.md, and every message in your inbox.',
   '2. Review board.md + tasks.json and the current roster of agents (active vs archived).',
   '3. Check fleet health: read fleet.json in the hive root for every agent\'s live tokens, cost, status, breaker level, and inbox backlog (`claude agents` will NOT show your hive\'s agents). Flag anyone stalled, over-budget, or breaker-armed.',
   '4. Skim COMMANDS.md (hive root) for the Claude Code commands you can use — and run `mempalace wake-up` for a memory digest if the CLI is available.',
-  'Then begin orchestrating: triage requests, delegate work to the team, and keep everyone unblocked. You are fully autonomous — there is no approval queue, so handle tool-permission prompts in this session yourself (the human can approve them remotely from their phone).'
+  'Then begin orchestrating: triage requests, delegate to Talent Researcher, Candidate Analyst, or Automation Engineer, and keep everyone unblocked. Candidate outreach and candidate-system writes remain blocked without Mike\'s explicit approval for the exact action.'
 ].join('\n');
 
 // Per-pty submission chain. Every submitToPty for a given pty is appended here so
@@ -397,19 +398,20 @@ export function useHive(config: HarnessConfig | null): void {
         // fresh session. Without this the most important context on the floor —
         // the orchestrator's — was lost on every restart.
         resume: true,
-        hive: { id: GOD_ID, name: 'Michael', provider: godProvider, cwd: config.harnessHome!, isGod: true, role: 'orchestrator (god)' }
+        hive: { id: GOD_ID, name: TALENT_CHIEF_NAME, provider: godProvider, cwd: config.harnessHome!, isGod: true, role: 'AI Fund Talent orchestrator and Mike interface' }
       });
       if (cancelled) { godSpawning.current = false; return; }
       if (!res.ok) { godSpawning.current = false; useStore.getState().setGodStatus('failed'); return; }
       const god: Agent = {
         id: GOD_ID,
-        name: 'Michael',
+        name: TALENT_CHIEF_NAME,
         character: 'michael',
         accent: 'lemon',
-        description: 'god — runs the floor, triages requests, escalates only critical calls to you',
+        description: 'AI Fund Talent orchestrator — delegates, tracks, synthesizes, and escalates only consequential decisions',
         project: 'hive',
         tmuxTarget: '',
         cwd: config.harnessHome!,
+        goal: TALENT_CHIEF_GOAL,
         status: 'idle',
         action: 'running the floor',
         progress: 0,
@@ -437,7 +439,7 @@ export function useHive(config: HarnessConfig | null): void {
       bootGraceUntil.current[GOD_ID] = Date.now() + BOOT_GRACE_MS;
       void (async () => {
         try {
-          const remoteCommand = remoteControlCommandForProvider(godProvider, 'Michael');
+          const remoteCommand = remoteControlCommandForProvider(godProvider, TALENT_CHIEF_NAME);
           if (remoteCommand) {
             // settleMs pauses the chain ~1.5s after /remote-control before the
             // orientation prompt (fresh spawns only) is submitted next.

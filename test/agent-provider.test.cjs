@@ -68,7 +68,8 @@ test('cursor is a recognized, selectable, god-eligible provider', () => {
   assert.strictEqual(ap.canReceiveInbox('cursor'), true, 'interactive TUI can receive inbox');
 });
 
-test('inferAgentProvider maps cursor-agent (canonical) and agent (alias) to cursor', () => {
+test('inferAgentProvider maps Cursor Desktop, cursor-agent, and agent alias to cursor', () => {
+  assert.strictEqual(ap.inferAgentProvider('cursor agent --force'), 'cursor');
   assert.strictEqual(ap.inferAgentProvider('cursor-agent'), 'cursor');
   assert.strictEqual(ap.inferAgentProvider('/Users/me/.local/bin/cursor-agent --model gpt-5.6-luna-high'), 'cursor');
   assert.strictEqual(ap.inferAgentProvider('agent'), 'cursor');
@@ -76,7 +77,11 @@ test('inferAgentProvider maps cursor-agent (canonical) and agent (alias) to curs
 
 test('cursor preset is interactive (no -p), uses force+trust auto flags, types seed into TUI', () => {
   const p = ap.providerPreset('cursor');
-  assert.strictEqual(p.defaultCommand, 'cursor-agent', 'default command binary');
+  assert.strictEqual(
+    p.defaultCommand,
+    'cursor agent --trust --sandbox enabled --auto-review',
+    'Cursor Desktop agent subcommand uses the sandboxed unattended posture'
+  );
   assert.strictEqual(p.initialPromptFlag, undefined, 'no -p; stay interactive');
   assert.strictEqual(p.seedDelivery, 'type-into-tui', 'hive protocol typed after boot');
   assert.strictEqual(ap.autoModeFlagForProvider('cursor'), '--force --trust');

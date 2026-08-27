@@ -22,14 +22,8 @@ SOFTWARE.
 
 ---
 
-NOTE ON BUNDLED ART ASSETS
+AI FUND TALENT PROTOTYPE NOTE
 
-This MIT License applies to the SOURCE CODE of this project. It does NOT apply
-to the bundled pixel-art assets under src/renderer/src/assets/ (tilesets and
-maps). Those are "Modern Interiors - RPG Tileset [16X16]" by LimeZu, licensed
-separately under the LimeZu Complete Version license, which permits editing and
-use in commercial and non-commercial projects and REQUIRES credit to LimeZu
-(https://limezu.itch.io/). The Office cast sprites are not LimeZu art -- they are
-drawn procedurally in src/renderer/src/scene/office/portraitArt.ts and are
-covered by this MIT License like the rest of the source. See
-src/renderer/src/assets/ATTRIBUTION.md for details.
+The AI Fund Talent Runtime modifications and original minimal office tiles are
+also provided under this MIT License. The separately licensed LimeZu tilesets
+and the upstream Tiled maps derived from them are not included in this fork.

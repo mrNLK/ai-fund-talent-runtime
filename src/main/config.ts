@@ -417,20 +417,57 @@ export interface HarnessConfig {
   reflectMinBytes?: number;
 }
 
+const TALENT_HARNESS_HOME = process.env.AI_FUND_TALENT_HOME || join(homedir(), 'AI Fund Talent Runtime');
+const TALENT_PROJECT_HOME = process.env.AI_FUND_TALENT_PROJECT || process.cwd();
+
+/** The private Talent prototype must never inherit previously persisted
+ * integrations, autonomous bypasses, inbound triggers, analytics, or voice
+ * credentials from another Munder installation that shares Electron userData. */
+function withTalentIsolation(cfg: HarnessConfig): HarnessConfig {
+  if (process.env.AI_FUND_TALENT_MODE !== '1') return cfg;
+  return {
+    ...cfg,
+    harnessHome: TALENT_HARNESS_HOME,
+    recentHives: [TALENT_HARNESS_HOME],
+    registeredRepos: [TALENT_PROJECT_HOME],
+    autoMode: false,
+    orchestratorMaySpawn: false,
+    integrations: [],
+    autoUpdate: false,
+    telemetryEnabled: false,
+    multiWindow: false,
+    slackEnabled: false,
+    slackSigningSecret: undefined,
+    slackBotToken: undefined,
+    slackChannelId: undefined,
+    slackProactivePosting: false,
+    freeflowEnabled: false,
+    groqApiKey: undefined,
+    realtimeVoiceEnabled: false,
+    webhookEnabled: false,
+    webhookSecret: undefined,
+    webhookTriggers: [],
+    missions: [],
+    semanticMemory: false,
+    reflectEnabled: false
+  };
+}
+
 const DEFAULTS: HarnessConfig = {
-  onboardingComplete: false,
-  harnessHome: null,
-  recentHives: [],
-  registeredRepos: [],
-  autoMode: true,
+  onboardingComplete: true,
+  audience: 'non-technical',
+  harnessHome: TALENT_HARNESS_HOME,
+  recentHives: [TALENT_HARNESS_HOME],
+  registeredRepos: [TALENT_PROJECT_HOME],
+  autoMode: false,
   orchestratorMaySpawn: false,
   defaultCommand: 'claude',
   godProvider: 'claude',
-  godModel: 'claude-opus-4-8',
+  godModel: 'opus',
   // Global default model for every agent that hasn't picked one explicitly — wins
   // over the role-based tiers (modelForRole) in the spawn handler, so all agents
   // (incl. god) default to Fable 5. A per-agent model choice still overrides it.
-  defaultModel: 'claude-fable-5',
+  defaultModel: 'sonnet',
   // Seeded from the MCP catalog so the consent defaults never drift from it
   // (safe-readonly ON, write/secret OFF).
   mcpDefaults: defaultMcpDefaults(),
@@ -438,14 +475,14 @@ const DEFAULTS: HarnessConfig = {
   workerIdleTimeoutMinutes: 20,
   integrations: [],
   defaultWorkerTokenCap: 0, // 0 = unlimited (human directive: NO per-worker cap)
-  semanticMemory: true,
+  semanticMemory: false,
   embeddingModel: 'minilm',
-  missions: [OPS_STANDUP_MISSION],
+  missions: [],
   notifications: false,
   strongKeepalive: false,
-  autoUpdate: true,
-  telemetryEnabled: true,
-  multiWindow: true,
+  autoUpdate: false,
+  telemetryEnabled: false,
+  multiWindow: false,
   tvShowOffices: false,
   officeTheme: 'office',
   slackEnabled: false,
@@ -454,7 +491,7 @@ const DEFAULTS: HarnessConfig = {
   slackChannelId: undefined,
   slackPort: undefined,
   slackProactivePosting: false,
-  freeflowEnabled: true,
+  freeflowEnabled: false,
   groqApiKey: undefined,
   freeflowModel: 'whisper-large-v3-turbo',
   realtimeVoiceEnabled: false,
@@ -472,7 +509,7 @@ const DEFAULTS: HarnessConfig = {
   // Memory reflection — preventive; nobody is over threshold today, so it sits
   // dark until an agent's memory crosses one of these (the verify gate is the
   // safety for the LLM step). Thresholds DECIDED by god 2026-06-06.
-  reflectEnabled: true,
+  reflectEnabled: false,
   reflectIntervalMs: 1_800_000,
   reflectByteTriggerPct: 50,
   reflectSectionTrigger: 50,
@@ -588,13 +625,13 @@ export function readConfig(): HarnessConfig {
   // No file yet = a first run with nothing to migrate; the defaults ARE the
   // post-migration shape. Deliberately does not persist — a bare read must not
   // conjure a config.json before onboarding has written one.
-  if (!existsSync(p)) return withTriggerDefaults({ ...DEFAULTS });
+  if (!existsSync(p)) return withTalentIsolation(withTriggerDefaults({ ...DEFAULTS }));
   try {
     const raw = readFileSync(p, 'utf8');
     const parsed = JSON.parse(raw);
-    return normalizeStoredHomes(migrateTriggersV1(withTriggerDefaults({ ...DEFAULTS, ...parsed })));
+    return withTalentIsolation(normalizeStoredHomes(migrateTriggersV1(withTriggerDefaults({ ...DEFAULTS, ...parsed }))));
   } catch {
-    return withTriggerDefaults({ ...DEFAULTS });
+    return withTalentIsolation(withTriggerDefaults({ ...DEFAULTS }));
   }
 }
 

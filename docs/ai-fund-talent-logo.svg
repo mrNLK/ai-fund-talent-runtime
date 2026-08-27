@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="420" height="72" viewBox="0 0 420 72" role="img" aria-labelledby="title desc">
+  <title id="title">AI Fund Talent Runtime</title>
+  <desc id="desc">AI Fund monogram with Talent Runtime wordmark</desc>
+  <rect width="72" height="72" rx="12" fill="#14213D"/>
+  <path d="M15 53 31 17h10l16 36H46l-3-8H29l-3 8Zm17-17h8l-4-11Z" fill="#F4B942"/>
+  <path d="M57 17h-9v27h9z" fill="#FFFFFF" opacity=".92"/>
+  <text x="92" y="31" fill="#14213D" font-family="Inter,Arial,sans-serif" font-size="21" font-weight="700">AI FUND TALENT</text>
+  <text x="92" y="53" fill="#5B6474" font-family="Inter,Arial,sans-serif" font-size="15" font-weight="600" letter-spacing="2">RUNTIME</text>
+</svg>

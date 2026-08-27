@@ -4,6 +4,7 @@ import { PixelButton } from './PixelButton';
 import { PixelBadge } from './PixelBadge';
 import { Icon } from './Icon';
 import { useStore } from '@/store/store';
+import type { TaskReviewEntry, TaskReviewStatus } from '@shared/taskEffectiveness';
 
 /** A card on the task kanban. Mirrors HiveTask in the main/preload process —
  *  re-declared locally so the renderer doesn't reach into the preload package
@@ -31,6 +32,22 @@ export interface HiveTask {
   /** First-class human feedback: the god appends {q} when a card needs the
    *  human; the ASK ME view fills in {a}. Full history stays on the card. */
   humanQA?: HumanQA[];
+  /** Review-ready completion packet. All fields remain on the local task card. */
+  result?: string;
+  deliverable?: string;
+  artifacts?: string[];
+  evidence?: string[];
+  checks?: string[];
+  limitations?: string[];
+  approvalNeeded?: string;
+  completedAt?: string;
+  reviewStatus?: TaskReviewStatus;
+  reviewedAt?: string;
+  firstReviewStatus?: TaskReviewStatus;
+  reworkCount?: number;
+  reviewNote?: string;
+  timeSavedMinutes?: number;
+  reviewHistory?: TaskReviewEntry[];
 }
 
 /** The card's currently open question for the human, if any. An entry the human
@@ -47,6 +64,30 @@ export function openQuestion(t: HiveTask): HumanQA | undefined {
 /** Waiting on the human = blocked with an unanswered question on the card. */
 export function waitsOnHuman(t: HiveTask): boolean {
   return t.status === 'blocked' && !!openQuestion(t);
+}
+
+const REVIEW_STATUSES: readonly TaskReviewStatus[] = ['accepted', 'rework', 'discarded'];
+
+function textItem(value: unknown): string | null {
+  if (typeof value === 'string' && value.trim()) return value.trim();
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const entry = value as Record<string, unknown>;
+  for (const key of ['label', 'title', 'path', 'url', 'href', 'text']) {
+    if (typeof entry[key] === 'string' && entry[key].trim()) return entry[key].trim();
+  }
+  return null;
+}
+
+function textList(...values: unknown[]): string[] | undefined {
+  const out: string[] = [];
+  for (const value of values) {
+    const entries = Array.isArray(value) ? value : value == null ? [] : [value];
+    for (const entry of entries) {
+      const text = textItem(entry);
+      if (text && !out.includes(text)) out.push(text);
+    }
+  }
+  return out.length > 0 ? out : undefined;
 }
 
 type Status = HiveTask['status'];
@@ -103,6 +144,39 @@ export function parseTasks(raw: unknown): HiveTask[] {
             // Preserve a dismissal across the 5s re-parse, else the card would
             // resurface on the next poll (openQuestion would see it as open).
             dismissedAt: typeof e.dismissedAt === 'string' ? e.dismissedAt : undefined
+          }))
+        : undefined,
+      result: typeof t.result === 'string' ? t.result : undefined,
+      deliverable: typeof t.deliverable === 'string' ? t.deliverable : undefined,
+      // Accept the common field spellings agents already use, while exposing
+      // one stable renderer model. The raw ledger remains untouched.
+      artifacts: textList(t.artifacts, t.artifactRefs, t.files, t.commit),
+      evidence: textList(t.evidence, t.sources, t.citations),
+      checks: textList(t.checks, t.verification, t.tests),
+      limitations: textList(t.limitations, t.caveats, t.gaps),
+      approvalNeeded: typeof t.approvalNeeded === 'string'
+        ? t.approvalNeeded
+        : typeof t.approval === 'string' ? t.approval : undefined,
+      completedAt: typeof t.completedAt === 'string' ? t.completedAt : undefined,
+      reviewStatus: REVIEW_STATUSES.includes(t.reviewStatus as TaskReviewStatus)
+        ? (t.reviewStatus as TaskReviewStatus) : undefined,
+      reviewedAt: typeof t.reviewedAt === 'string' ? t.reviewedAt : undefined,
+      firstReviewStatus: REVIEW_STATUSES.includes(t.firstReviewStatus as TaskReviewStatus)
+        ? (t.firstReviewStatus as TaskReviewStatus) : undefined,
+      reworkCount: typeof t.reworkCount === 'number' && Number.isFinite(t.reworkCount)
+        ? Math.max(0, Math.round(t.reworkCount)) : 0,
+      reviewNote: typeof t.reviewNote === 'string' ? t.reviewNote : undefined,
+      timeSavedMinutes: typeof t.timeSavedMinutes === 'number' && Number.isFinite(t.timeSavedMinutes)
+        ? Math.max(0, Math.round(t.timeSavedMinutes)) : undefined,
+      reviewHistory: Array.isArray(t.reviewHistory)
+        ? (t.reviewHistory as unknown[])
+          .filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === 'object')
+          .filter((entry) => REVIEW_STATUSES.includes(entry.decision as TaskReviewStatus) && typeof entry.at === 'string')
+          .map((entry) => ({
+            decision: entry.decision as TaskReviewStatus,
+            at: entry.at as string,
+            note: typeof entry.note === 'string' ? entry.note : undefined,
+            timeSavedMinutes: typeof entry.timeSavedMinutes === 'number' ? entry.timeSavedMinutes : undefined
           }))
         : undefined
     }));
@@ -170,7 +244,7 @@ export function TasksKanban() {
           {tasks.length} task{tasks.length === 1 ? '' : 's'}
         </span>
         <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--cth-ink-300)' }}>
-          new work? dispatch it to Michael (monitor tab)
+          new work? dispatch it to Talent Chief (monitor tab)
         </span>
       </div>
 
@@ -253,6 +327,11 @@ function TaskCard({ task, accent, assigneeName, onOpen, onDismiss }: {
               {assigneeName.toUpperCase()}
             </span>
           )}
+          {task.reviewStatus && (
+            <span style={{ fontSize: 8, color: reviewColor(task.reviewStatus), fontFamily: 'var(--cth-font-display)' }}>
+              {reviewLabel(task.reviewStatus)}
+            </span>
+          )}
         </span>
         {waitsOnHuman(task) && (
           <span title="waiting on YOUR answer — see the ASK ME tab" style={{
@@ -290,12 +369,18 @@ function TaskCard({ task, accent, assigneeName, onOpen, onDismiss }: {
 // the big stage instead of the narrow side panel. Exported for App's
 // TaskDetailOverlay; opened via the store's openTaskDetail from anywhere.
 
-export function TaskDetail({ task, all, assigneeName, onMove, onAssign, onClose }: {
+export function TaskDetail({ task, all, assigneeName, onMove, onAssign, onAnswer, onReview, onClose }: {
   task: HiveTask;
   all: HiveTask[];
   assigneeName?: string;
   onMove: (s: Status) => void;
   onAssign: () => void;
+  onAnswer?: () => void;
+  onReview?: (
+    decision: TaskReviewStatus,
+    note: string,
+    timeSavedMinutes?: number
+  ) => Promise<{ ok: boolean; error?: string }>;
   onClose: () => void;
 }) {
   const col = COLUMNS.find((c) => c.key === task.status) ?? COLUMNS[0];
@@ -305,6 +390,37 @@ export function TaskDetail({ task, all, assigneeName, onMove, onAssign, onClose 
     .map((id) => all.find((t) => t.id === id))
     .filter((t): t is HiveTask => !!t);
   const created = new Date(task.createdAt);
+  const [reviewNote, setReviewNote] = useState('');
+  const [timeSaved, setTimeSaved] = useState('');
+  const [reviewing, setReviewing] = useState<TaskReviewStatus | null>(null);
+  const [reviewError, setReviewError] = useState<string | null>(null);
+  const outputCount = (task.artifacts?.length ?? 0) + (task.deliverable ? 1 : 0);
+  const packetChecks = [
+    { label: 'outcome', ok: !!task.result?.trim() },
+    { label: 'deliverable', ok: outputCount > 0 },
+    { label: 'checks', ok: (task.checks?.length ?? 0) > 0 }
+  ];
+  const packetComplete = packetChecks.every((item) => item.ok);
+
+  const review = async (decision: TaskReviewStatus) => {
+    if (!onReview || reviewing) return;
+    if (decision === 'rework' && !reviewNote.trim()) {
+      setReviewError('Add a short note so Talent Chief knows what to change.');
+      return;
+    }
+    setReviewing(decision);
+    setReviewError(null);
+    const minutes = timeSaved ? Number(timeSaved) : undefined;
+    try {
+      const result = await onReview(decision, reviewNote, minutes);
+      if (!result.ok) setReviewError(result.error ?? 'The review could not be saved.');
+      else setReviewNote('');
+    } catch {
+      setReviewError('The review could not be saved.');
+    } finally {
+      setReviewing(null);
+    }
+  };
   return (
     <div
       onClick={onClose}
@@ -349,6 +465,45 @@ export function TaskDetail({ task, all, assigneeName, onMove, onAssign, onClose 
               {task.description?.trim() || <span style={{ color: 'var(--cth-ink-300)' }}>(no description on this card)</span>}
             </div>
 
+            {/* Completion packet: the reviewable outcome, its evidence, and
+                the deterministic checks that make "done" meaningful. */}
+            {(task.status === 'done' || task.result || task.reviewStatus) && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <div style={labelStyle}>COMPLETION PACKET</div>
+                  <span style={{
+                    marginLeft: 'auto', padding: '2px 6px 1px',
+                    background: packetComplete ? 'var(--cth-mint-light)' : 'var(--cth-lemon-light)',
+                    color: 'var(--cth-ink-900)', fontFamily: 'var(--cth-font-display)', fontSize: 8,
+                    boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)'
+                  }}>
+                    {packetComplete ? 'HANDOFF COMPLETE' : `${packetChecks.filter((item) => item.ok).length}/3 HANDOFF`}
+                  </span>
+                </div>
+
+                <OutcomeBlock label="OUTCOME" value={task.result} empty="Completion summary missing." />
+                {task.deliverable && <OutcomeBlock label="DELIVERABLE" value={task.deliverable} />}
+                <OutcomeList label="ARTIFACTS" items={task.artifacts} references />
+                <OutcomeList label="EVIDENCE" items={task.evidence} references />
+                <OutcomeList label="CHECKS" items={task.checks} />
+                <OutcomeList label="LIMITATIONS" items={task.limitations} tone="warning" />
+                {task.approvalNeeded && (
+                  <OutcomeBlock label="APPROVAL NEEDED" value={task.approvalNeeded} tone="warning" />
+                )}
+
+                {!packetComplete && (
+                  <div style={{
+                    padding: '5px 7px', background: 'var(--cth-lemon-light)',
+                    boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)',
+                    color: 'var(--cth-ink-700)', fontSize: 11, lineHeight: '16px'
+                  }}>
+                    Missing: {packetChecks.filter((item) => !item.ok).map((item) => item.label).join(', ')}.
+                    Send this back for completion before accepting it.
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* The human Q&A trail — every decision documented on the card */}
             {(task.humanQA?.length ?? 0) > 0 && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -375,8 +530,13 @@ export function TaskDetail({ task, all, assigneeName, onMove, onAssign, onClose 
                         {e.a}
                       </div>
                     ) : (
-                      <div style={{ fontSize: 11, color: 'var(--cth-coral)', fontFamily: 'var(--cth-font-display)' }}>
-                        AWAITING YOUR ANSWER — ASK ME TAB
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <div style={{ fontSize: 11, color: 'var(--cth-coral)', fontFamily: 'var(--cth-font-display)' }}>
+                          AWAITING YOUR ANSWER
+                        </div>
+                        {onAnswer && (
+                          <PixelButton variant="primary" size="sm" onClick={onAnswer}>answer on today</PixelButton>
+                        )}
                       </div>
                     )}
                   </div>
@@ -406,6 +566,75 @@ export function TaskDetail({ task, all, assigneeName, onMove, onAssign, onClose 
               </div>
             )}
 
+            {/* Two-second usefulness feedback. Stored locally on the same task
+                so first-pass quality and rework are measurable without sending
+                prompts, candidate data, or transcripts to analytics. */}
+            {(task.status === 'done' || task.reviewStatus) && onReview && (
+              <div style={{
+                display: 'flex', flexDirection: 'column', gap: 7, padding: 9,
+                background: 'var(--cth-cream-200)', boxShadow: 'inset 0 0 0 1px var(--cth-ink-300)'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <div style={labelStyle}>YOUR REVIEW</div>
+                  {task.reviewStatus && (
+                    <span style={{
+                      marginLeft: 'auto', fontFamily: 'var(--cth-font-display)', fontSize: 8,
+                      color: reviewColor(task.reviewStatus)
+                    }}>
+                      {reviewLabel(task.reviewStatus)}
+                      {(task.reworkCount ?? 0) > 0 ? ` · ${task.reworkCount} REWORK` : ''}
+                    </span>
+                  )}
+                </div>
+                <textarea
+                  value={reviewNote}
+                  onChange={(event) => setReviewNote(event.target.value)}
+                  placeholder="Review note (required for Needs work)"
+                  rows={2}
+                  style={{ ...inputStyle, resize: 'vertical', minHeight: 48 }}
+                />
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                  <label style={{ ...labelStyle, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                    TIME SAVED
+                    <select value={timeSaved} onChange={(event) => setTimeSaved(event.target.value)} style={selectStyle}>
+                      <option value="">optional</option>
+                      <option value="15">15 min</option>
+                      <option value="30">30 min</option>
+                      <option value="60">1 hour</option>
+                      <option value="120">2+ hours</option>
+                    </select>
+                  </label>
+                  <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 5 }}>
+                    <PixelButton
+                      variant="primary"
+                      size="sm"
+                      disabled={reviewing !== null || !task.result?.trim()}
+                      title={!task.result?.trim() ? 'A completion summary is required before acceptance' : undefined}
+                      onClick={() => void review('accepted')}
+                    >accepted</PixelButton>
+                    <PixelButton
+                      variant="secondary"
+                      size="sm"
+                      disabled={reviewing !== null}
+                      onClick={() => void review('rework')}
+                    >needs work</PixelButton>
+                    <PixelButton
+                      variant="ghost"
+                      size="sm"
+                      disabled={reviewing !== null}
+                      onClick={() => void review('discarded')}
+                    >discard</PixelButton>
+                  </span>
+                </div>
+                {reviewError && <div role="alert" style={{ color: 'var(--cth-coral)', fontSize: 11 }}>{reviewError}</div>}
+                {(task.reviewHistory?.length ?? 0) > 0 && (
+                  <div style={{ fontSize: 10, color: 'var(--cth-ink-500)' }}>
+                    {task.reviewHistory!.map((entry) => `${reviewLabel(entry.decision)} ${formatCompactDate(entry.at)}`).join(' · ')}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Controls */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <select
@@ -431,6 +660,91 @@ export function TaskDetail({ task, all, assigneeName, onMove, onAssign, onClose 
       </div>
     </div>
   );
+}
+
+function OutcomeBlock({ label, value, empty, tone = 'default' }: {
+  label: string;
+  value?: string;
+  empty?: string;
+  tone?: 'default' | 'warning';
+}) {
+  if (!value && !empty) return null;
+  return (
+    <div style={{
+      padding: '7px 8px',
+      background: tone === 'warning' ? 'var(--cth-lemon-light)' : 'var(--cth-paper-100)',
+      boxShadow: 'inset 0 0 0 1px var(--cth-ink-100)'
+    }}>
+      <div style={{ ...labelStyle, marginBottom: 4 }}>{label}</div>
+      <div style={{
+        fontSize: 12, lineHeight: '17px', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+        color: value ? 'var(--cth-ink-900)' : 'var(--cth-coral)'
+      }}>{value || empty}</div>
+    </div>
+  );
+}
+
+function OutcomeList({ label, items, references = false, tone = 'default' }: {
+  label: string;
+  items?: string[];
+  references?: boolean;
+  tone?: 'default' | 'warning';
+}) {
+  if (!items?.length) return null;
+  return (
+    <div style={{
+      padding: '7px 8px',
+      background: tone === 'warning' ? 'var(--cth-lemon-light)' : 'var(--cth-paper-100)',
+      boxShadow: 'inset 0 0 0 1px var(--cth-ink-100)'
+    }}>
+      <div style={{ ...labelStyle, marginBottom: 4 }}>{label}</div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+        {items.map((item, index) => (
+          <button
+            key={`${item}-${index}`}
+            type="button"
+            disabled={!references}
+            title={references ? 'Open a URL or file; copy other references' : undefined}
+            onClick={references ? () => openReference(item) : undefined}
+            style={{
+              display: 'flex', gap: 6, alignItems: 'flex-start', padding: 0, border: 'none',
+              background: 'transparent', textAlign: 'left', color: 'var(--cth-ink-900)',
+              fontFamily: 'var(--cth-font-ui)', fontSize: 12, lineHeight: '17px',
+              cursor: references ? 'pointer' : 'default'
+            }}
+          >
+            <span style={{ color: 'var(--cth-ink-500)' }}>•</span>
+            <span style={{ wordBreak: 'break-word', textDecoration: references ? 'underline' : 'none' }}>{item}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function openReference(value: string): void {
+  if (/^https?:\/\//i.test(value)) {
+    void window.cth.openExternal(value);
+    return;
+  }
+  if (value.startsWith('/')) {
+    useStore.getState().openFileInIde(value);
+    return;
+  }
+  void navigator.clipboard?.writeText(value);
+}
+
+function reviewLabel(status: TaskReviewStatus): string {
+  return status === 'accepted' ? 'ACCEPTED' : status === 'rework' ? 'NEEDS WORK' : 'DISCARDED';
+}
+
+function reviewColor(status: TaskReviewStatus): string {
+  return status === 'accepted' ? 'var(--cth-mint)' : status === 'rework' ? 'var(--cth-lemon)' : 'var(--cth-coral)';
+}
+
+function formatCompactDate(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '' : date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
 function PriorityDots({ level }: { level: number }) {

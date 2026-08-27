@@ -5,6 +5,7 @@ import type { HarnessConfig } from '@/store/config';
 import { DEFAULT_ORG_TRIGGER } from '@shared/triggers';
 import { OfficeFloor } from '@/scene/office/OfficeFloor';
 import { useHive } from '@/hooks/useHive';
+import { useTalentTeam } from '@/hooks/useTalentTeam';
 import { MemoryPanel } from '@/components/MemoryPanel';
 import { AgentDetailPanel } from '@/components/AgentDetailPanel';
 import { AgentStrip } from '@/components/AgentStrip';
@@ -27,7 +28,7 @@ import { FullscreenTerminal } from '@/components/FullscreenTerminal';
 import { TaskDetailOverlay } from '@/components/TaskDetailOverlay';
 import { IdePanel } from '@/ide/IdePanel';
 import { useHoldOptionToTalk } from '@/freeflow/holdOption';
-import brandLogo from '@brand/logo.png?url';
+import brandLogo from '@brand/ai-fund-talent-logo.svg?url';
 
 // Injected at build time from package.json (see electron.vite.config.ts).
 declare const __APP_VERSION__: string;
@@ -59,7 +60,7 @@ export function App() {
         return true;
       }
     } catch { /* localStorage unavailable — show the picker */ }
-    return false;
+    return true;
   });
   const [settingsOpen, setSettingsOpen] = useState(false);
   /** Which tab Settings opens on. Set by a `cth:open-settings` deep link, reset
@@ -177,6 +178,7 @@ export function App() {
   // hook) so Michael doesn't boot against the current home while the user may be
   // about to switch to a different one.
   useHive(hiveOpened ? config : null);
+  useTalentTeam(config, godStatus === 'ready');
 
   // Pre-warm a persistent terminal for every live agent so its output is
   // buffered from spawn. Switching agents then re-attaches an already-rendered
@@ -282,7 +284,7 @@ export function App() {
       >
         <img
           src={brandLogo}
-          alt="Munder Difflin"
+          alt="AI Fund Talent Runtime"
           style={{ height: 20, width: 'auto', display: 'block' }}
         />
         {/* v0.3.7: the version is no longer inert text — it doubles as the

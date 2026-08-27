@@ -161,6 +161,27 @@ export interface HiveTask {
   humanQA?: HumanQA[];
   /** Outcome summary used for the Slack done-notification. */
   result?: string;
+  /** Review-ready handoff fields. Flexible raw agent spellings are normalized
+   *  by the renderer, while these canonical fields are written by the app. */
+  deliverable?: string;
+  artifacts?: string[];
+  evidence?: string[];
+  checks?: string[];
+  limitations?: string[];
+  approvalNeeded?: string;
+  completedAt?: string;
+  reviewStatus?: 'accepted' | 'rework' | 'discarded';
+  reviewedAt?: string;
+  firstReviewStatus?: 'accepted' | 'rework' | 'discarded';
+  reworkCount?: number;
+  reviewNote?: string;
+  timeSavedMinutes?: number;
+  reviewHistory?: Array<{
+    decision: 'accepted' | 'rework' | 'discarded';
+    at: string;
+    note?: string;
+    timeSavedMinutes?: number;
+  }>;
   /** Origin thread for a Slack-sourced task (drives the done-summary reply). */
   slack?: { channel: string; thread_ts: string };
   /** SHA-256 of the capability token for a generic-webhook-sourced task (drives

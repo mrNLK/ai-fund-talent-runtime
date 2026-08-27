@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "default": {
+    "candidateCommunications": "deny",
+    "candidateRecordWrites": "deny",
+    "productionDataWrites": "deny",
+    "credentialExport": "deny"
+  },
+  "roles": {
+    "talent-chief": {
+      "orchestration": "allow",
+      "publicResearch": "allow",
+      "repositoryWrites": "limited",
+      "candidateCommunications": "approval-required",
+      "candidateRecordWrites": "approval-required"
+    },
+    "talent-researcher": {
+      "publicResearch": "allow",
+      "candidateCommunications": "deny",
+      "candidateRecordWrites": "deny"
+    },
+    "candidate-analyst": {
+      "publicResearch": "allow",
+      "structuredAnalysis": "allow",
+      "candidateCommunications": "deny",
+      "candidateRecordWrites": "deny"
+    },
+    "automation-engineer": {
+      "repositoryWrites": "allow",
+      "localAutomation": "allow",
+      "candidateCommunications": "deny",
+      "candidateRecordWrites": "deny",
+      "productionDataWrites": "deny"
+    }
+  }
+}

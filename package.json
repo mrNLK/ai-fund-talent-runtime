@@ -1,8 +1,9 @@
 {
-  "name": "munder-difflin",
+  "name": "ai-fund-talent-runtime",
   "version": "0.4.5",
   "private": true,
-  "description": "Clones for you and your team, working 24/7 — a free, local-first multi-agent harness that turns the CLI coding agent you already run into a clone of you, coordinating an office of agents on your machine.",
+  "description": "Private local-first AI Fund Talent multi-agent prototype based on Munder Difflin.",
+  "productName": "AI Fund Talent Runtime",
   "main": "out/main/index.js",
   "author": "Chaitanya Giri",
   "homepage": "https://munderdiffl.in/",
@@ -12,6 +13,8 @@
   },
   "scripts": {
     "dev": "electron-vite dev",
+    "talent:launch": "electron-vite dev",
+    "talent:check": "node scripts/check-talent-prerequisites.mjs",
     "build": "electron-vite build && npm run copy:main-assets",
     "copy:main-assets": "node tools/copy-main-assets.cjs",
     "preview": "electron-vite preview",
@@ -25,6 +28,9 @@
     "dist:mac": "npm run build && electron-builder --mac",
     "dist:win": "npm run build && electron-builder --win",
     "dist:linux": "npm run build && electron-builder --linux"
+  },
+  "engines": {
+    "node": ">=20 <23"
   },
   "dependencies": {
     "@codemirror/lang-css": "^6.3.1",

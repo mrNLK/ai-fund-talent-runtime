@@ -3,6 +3,7 @@ import { PixelButton } from './PixelButton';
 import { PixelBadge } from './PixelBadge';
 import { useStore } from '@/store/store';
 import { type HiveTask, type HumanQA, openQuestion, waitsOnHuman } from './TasksKanban';
+import { buildHumanAnswerPatch } from '@shared/taskEffectiveness';
 
 /**
  * ASK ME — first-class human feedback through the task system.
@@ -80,24 +81,13 @@ export function AskMeTab() {
 
   const sendAnswer = async (task: HiveTask) => {
     const text = (drafts[task.id] ?? '').trim();
-    const open = openQuestion(task);
-    if (!text || !open || sending) return;
+    const answer = buildHumanAnswerPatch(task, text);
+    if (!answer || sending) return;
     setSending(task.id);
     try {
       // 1) Document the answer ON the card.
-      const next = tasks.map((t) => {
-        if (t.id !== task.id) return t;
-        const qa = (t.humanQA ?? []).map((e) =>
-          e === open || (e.q === open.q && !e.a)
-            ? { ...e, a: text, answeredAt: new Date().toISOString() }
-            : e
-        );
-        return { ...t, humanQA: qa };
-      });
-      const updated = next.find((candidate) => candidate.id === task.id);
-      const result = updated
-        ? await window.cth.hivePatchTask(task.id, { humanQA: updated.humanQA })
-        : { ok: false };
+      const next = tasks.map((t) => (t.id === task.id ? { ...t, humanQA: answer.humanQA } : t));
+      const result = await window.cth.hivePatchTask(task.id, { humanQA: answer.humanQA });
       if (!result.ok) throw new Error('task changed before answer could be saved');
       setTasks(next);
       // 2) Tell the god, so the card gets unblocked and work continues.
@@ -107,7 +97,7 @@ export function AskMeTab() {
         subject: `HUMAN ANSWER on task "${task.title}"`,
         body: [
           `The human answered the open question on task ${task.id} ("${task.title}"):`,
-          `Q: ${open.q}`,
+          `Q: ${answer.question}`,
           `A: ${text}`,
           'The answer is also recorded in the card\'s humanQA. Act on it, unblock the card, and continue the work.'
         ].join('\n')
