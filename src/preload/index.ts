@@ -153,6 +153,12 @@ export interface HiveTask {
   description?: string;
   assignee?: string;
   status: 'todo' | 'doing' | 'blocked' | 'done';
+  /** Concrete cause for a system-blocked job. Human questions stay in humanQA. */
+  blockedReason?: string;
+  /** Reversible removal from active dashboards. The task remains in the ledger. */
+  archivedAt?: string;
+  archivedReason?: string;
+  retryRequestedAt?: string;
   dependsOn: string[];
   priority: number;
   createdAt: string;
