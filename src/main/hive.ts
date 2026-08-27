@@ -133,6 +133,27 @@ export interface HiveTask {
   /** Outcome summary, surfaced by the Slack done-notifier when this card reaches
    *  'done'. Optional; the notifier falls back to description/title. */
   result?: string;
+  /** Review-ready completion packet and local effectiveness fields. These stay
+   *  in tasks.json; anonymous product telemetry never receives their contents. */
+  deliverable?: string;
+  artifacts?: string[];
+  evidence?: string[];
+  checks?: string[];
+  limitations?: string[];
+  approvalNeeded?: string;
+  completedAt?: string;
+  reviewStatus?: 'accepted' | 'rework' | 'discarded';
+  reviewedAt?: string;
+  firstReviewStatus?: 'accepted' | 'rework' | 'discarded';
+  reworkCount?: number;
+  reviewNote?: string;
+  timeSavedMinutes?: number;
+  reviewHistory?: Array<{
+    decision: 'accepted' | 'rework' | 'discarded';
+    at: string;
+    note?: string;
+    timeSavedMinutes?: number;
+  }>;
   /** Set when this task originated from a Slack message — the thread the
    *  done-summary reply is posted back into. Consumed OUTBOUND only; populating
    *  it is the inbound/kanban side's job and does not affect routing. */
@@ -1416,6 +1437,9 @@ export class HiveManager {
       ? 'You are Michael\'s PREP ASSISTANT. You will be handed short, possibly vague instructions (each begins with "ENRICH TASK:"). For each one: (1) figure out which project it concerns and cd into the most relevant repo — you start in Michael\'s home directory; (2) gather concrete context READ-ONLY (exact file paths, current state, relevant code, conventions, active branch, gotchas) — NEVER modify, create, or delete files; (3) rewrite the instruction into ONE clear, self-contained prompt that Michael can execute autonomously, preserving the user\'s original intent without inventing scope. Then deliver it: write ONE message JSON into your outbox with "to":"god", "act":"request", a short subject, and the finished prompt as the body. Do NOT perform the task yourself — your only output is the improved prompt sent to Michael.'
       : 'For anything ambiguous, cross-cutting, or needing sign-off, address a message to "god".';
     const guardrailsLine = 'Guardrails: a circuit breaker watches the floor — a "Circuit breaker: steer/constrain" message means you are looping or overspending, so STOP repeating, summarize what you tried, and follow it. Be token-frugal (a floor-wide or per-agent token budget can pause you). The shared plan has two parts: board.md (freeform; god is the sole scribe) and tasks.json (structured kanban — todo/doing/blocked/done).';
+    const taskCompletionLine = meta.isGod
+      ? 'TASK COMPLETION: `done` means REVIEW-READY, not merely that an agent stopped. Before setting a card to done, record `completedAt` (ISO time) and a plain-language `result`. Also record the output in `deliverable` and/or `artifacts`, the verification in `checks`, source links in `evidence` when claims depend on external facts, known gaps in `limitations`, and any human authorization still required in `approvalNeeded`. Preserve these fields through rework. The human records `reviewStatus`, `reviewedAt`, `firstReviewStatus`, `reworkCount`, optional `timeSavedMinutes`, and `reviewHistory`; never overwrite or infer those review fields yourself.'
+      : '';
     const talentPolicyLine = `AI FUND TALENT POLICY: read ${inRoot('AI_FUND_TALENT_CONTEXT.md')} before Talent work and follow ${inRoot('talent-permissions.json')}. Candidate outreach, ATS/CRM changes, and candidate or production-data writes are disabled in this prototype. Use ${inRoot('TALENT_POLICY.cjs')} to check a proposed controlled action. Never put candidate names or mutable candidate facts in memory.md; keep them in task outputs.`;
     const researchStatus = isTalentResearchAgent(meta.id)
       ? talentResearchSecretStatus(loadTalentResearchSecrets())
@@ -1438,6 +1462,7 @@ export class HiveManager {
       `3. To ask another agent for something or share information, write ONE message JSON into ${inDir('outbox')} (schema in PROTOCOL.md). NEVER write into another agent's folder — the orchestrator delivers your outbox.`,
       '4. At the END of a task, append what you learned to memory.md so future-you remembers.',
       guardrailsLine,
+      taskCompletionLine,
       talentPolicyLine,
       researchToolsLine,
       memoryLine,

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useStore } from '@/store/store';
 import { TaskDetail, parseTasks, type HiveTask } from './TasksKanban';
+import { buildTaskReviewPatch, type TaskReviewStatus } from '@shared/taskEffectiveness';
 
 /**
  * App-wide host for the task detail: whoever calls store.openTaskDetail(id) —
@@ -55,6 +56,43 @@ export function TaskDetailOverlay() {
     } catch { void refresh(); }
   };
 
+  const review = async (
+    decision: TaskReviewStatus,
+    note: string,
+    timeSavedMinutes?: number
+  ): Promise<{ ok: boolean; error?: string }> => {
+    const patch = buildTaskReviewPatch(task, decision, { note, timeSavedMinutes });
+    setTasks((current) => current.map((entry) => (
+      entry.id === task.id ? { ...entry, ...patch } as HiveTask : entry
+    )));
+    try {
+      const saved = await window.cth.hivePatchTask(task.id, patch);
+      if (!saved.ok) {
+        void refresh();
+        return { ok: false, error: saved.error ?? 'The task changed before the review could be saved.' };
+      }
+      if (decision === 'rework') {
+        const notified = await window.cth.hiveSend({
+          to: 'god',
+          act: 'request',
+          subject: `REWORK REQUESTED on task "${task.title}"`,
+          body: [
+            `The human marked task ${task.id} ("${task.title}") as Needs work.`,
+            `Feedback: ${note.trim()}`,
+            'The review is recorded on the task card and its status is back to todo. Reassign it with the feedback included.'
+          ].join('\n')
+        }, 'human');
+        if (!notified.ok) {
+          return { ok: false, error: 'Review saved, but Talent Chief could not be notified.' };
+        }
+      }
+      return { ok: true };
+    } catch {
+      void refresh();
+      return { ok: false, error: 'The review could not be saved.' };
+    }
+  };
+
   const assign = () => {
     // Route through the Command Center's dispatch box (which mails the god —
     // the human never writes into a worker's inbox directly).
@@ -67,13 +105,21 @@ export function TaskDetailOverlay() {
     closeTaskDetail();
   };
 
+  const answer = () => {
+    useStore.getState().requestCommandCenterTab('today');
+    closeTaskDetail();
+  };
+
   return (
     <TaskDetail
+      key={task.id}
       task={task}
       all={tasks}
       assigneeName={nameFor(task.assignee)}
       onMove={(s) => void move(s)}
       onAssign={assign}
+      onAnswer={answer}
+      onReview={review}
       onClose={closeTaskDetail}
     />
   );
