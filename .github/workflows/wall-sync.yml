@@ -1,23 +1,12 @@
-# Founders' Wall sync — rebuilds docs/wall-data.json from Razorpay truth.
-# Additions open a PR for founder review; refund/dispute removals commit directly.
-# Requires repo Actions secrets: RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET.
+# Founders' Wall sync - manual only.
+#
+# This workflow was previously scheduled hourly, but this Talent runtime repo does
+# not have the Razorpay secrets it requires. Keeping it manual avoids recurring
+# failed GitHub Actions emails while preserving the workflow in case someone needs
+# to run the wall sync intentionally later.
 name: wall-sync
 
 on:
-  schedule:
-    # HOURLY (was every 30 min). ONE CADENCE across the whole metrics stack —
-    # the local dashboard runner is hourly too, and the two must not drift apart.
-    #
-    # :50 is chosen so this lands just BEFORE the dashboard's hourly pass at :07,
-    # not after it. The dashboard reports wall_published / wall_pending by
-    # comparing Razorpay truth against the published wall, so it should read a
-    # wall that was reconciled minutes ago rather than most of an hour ago.
-    # Off :00 on purpose: GitHub's scheduled-workflow queue is busiest there and
-    # starts get delayed most.
-    #
-    # Additions still wait on a review PR, so wall_pending legitimately stays
-    # non-zero until the founder merges — that is the gate working, not drift.
-    - cron: "50 * * * *"
   workflow_dispatch: {}
 
 concurrency:
